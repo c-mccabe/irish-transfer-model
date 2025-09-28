@@ -20,11 +20,12 @@ class EventData:
 
     This structure captures the essential information for modeling
     transfer patterns in a constituency-specific transfer event.
+    Uses party-level aggregation for better statistical power.
     """
     constituency_idx: int
-    source_indices: np.ndarray  # Indices of source candidates
-    active_indices: np.ndarray  # Indices of active destination candidates
-    transfer_counts: np.ndarray  # Observed transfer counts to active candidates
+    source_indices: np.ndarray  # Indices of source parties
+    active_indices: np.ndarray  # Indices of active destination parties
+    transfer_counts: np.ndarray  # Observed transfer counts to active parties
     total_transfers: float  # Total number of transfers from source
 
 
@@ -34,13 +35,30 @@ class ModelData:
     Complete dataset for hierarchical censored-transfer modeling.
 
     This structure organizes all transfer events across constituencies
-    for efficient Bayesian modeling with NumPyro.
+    for efficient Bayesian modeling with NumPyro. Uses party-level
+    aggregation for better statistical power and interpretability.
     """
-    n_sources: int  # Total number of source candidates (I)
-    n_destinations: int  # Total number of destination candidates (J)
+    n_source_parties: int  # Total number of source parties (I)
+    n_dest_parties: int  # Total number of destination parties (J)
     n_constituencies: int  # Total number of constituencies (C)
     events: List[EventData]  # List of all transfer events
-    candidate_names: Dict[int, str]  # Mapping from indices to candidate names
+    party_names: Dict[int, str]  # Mapping from indices to party names
+
+    # Legacy properties for backward compatibility
+    @property
+    def n_sources(self) -> int:
+        """Backward compatibility: n_source_parties."""
+        return self.n_source_parties
+
+    @property
+    def n_destinations(self) -> int:
+        """Backward compatibility: n_dest_parties."""
+        return self.n_dest_parties
+
+    @property
+    def candidate_names(self) -> Dict[int, str]:
+        """Backward compatibility: party_names."""
+        return self.party_names
 
 
 class ElectionType(Enum):

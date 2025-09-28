@@ -19,7 +19,7 @@ from stv_transfers.scraper import ElectionScraper
 from stv_transfers.data_structures import ModelData, EventData
 from stv_transfers.model import build_model_exact, build_model_augmented
 from stv_transfers.simulator import STVSimulator, Ballot
-from stv_transfers.diagnostics import compute_rhat, effective_sample_size
+from stv_transfers.diagnostics import check_rhat, effective_sample_size
 
 # Skip tests if NumPyro not available
 pytest.importorskip("numpyro")

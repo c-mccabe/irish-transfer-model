@@ -48,6 +48,14 @@ class ElectionScraper:
         self.candidate_index: Dict[str, int] = {"non-transferable": 0}
         self.next_index = 1
 
+        # Party indexing: for hierarchical party-level modeling
+        # Index 0 is reserved for non-transferable votes
+        self.party_index: Dict[str, int] = {"non-transferable": 0}
+        self.next_party_index = 1
+
+        # Candidate to party mapping
+        self.candidate_to_party: Dict[str, str] = {"non-transferable": "non-transferable"}
+
         # Session with proper headers
         self.session = requests.Session()
         self.session.headers.update({
@@ -83,6 +91,25 @@ class ElectionScraper:
             self.candidate_index[candidate_name] = self.next_index
             self.next_index += 1
         return self.candidate_index[candidate_name]
+
+    def _get_party_index(self, party_name: str) -> int:
+        """Get or create consistent index for party."""
+        if party_name not in self.party_index:
+            self.party_index[party_name] = self.next_party_index
+            self.next_party_index += 1
+        return self.party_index[party_name]
+
+    def _map_candidate_to_party(self, candidate_name: str, party_name: str) -> None:
+        """Map candidate to their party affiliation."""
+        # Store the mapping
+        self.candidate_to_party[candidate_name] = party_name
+
+        # Ensure party index exists
+        self._get_party_index(party_name)
+
+    def _get_candidate_party(self, candidate_name: str) -> str:
+        """Get party affiliation for a candidate."""
+        return self.candidate_to_party.get(candidate_name, "Independent")
 
     def fetch_constituency_page(self, election: str, constituency: str) -> Optional[str]:
         """
@@ -749,7 +776,10 @@ class ElectionScraper:
 
     def convert_to_model_format(self, parsed_data_list: List[Dict]) -> ModelData:
         """
-        Convert parsed constituency data to ModelData format.
+        Convert parsed constituency data to party-level ModelData format.
+
+        Aggregates candidate-level transfers by party affiliation for
+        better statistical power and interpretability.
 
         Parameters
         ----------
@@ -759,70 +789,92 @@ class ElectionScraper:
         Returns
         -------
         ModelData
-            Structured data ready for Bayesian modeling
+            Structured data ready for party-level Bayesian modeling
         """
         events = []
-        all_candidates = set()
+        all_parties = set()
 
-        # Collect all candidates across constituencies
+        # First pass: collect candidates and their party affiliations
         for data in parsed_data_list:
-            if data:
-                all_candidates.update(data['candidates'])
-
-        # Ensure non-transferable is included
-        all_candidates.add('non-transferable')
-
-        # Create final candidate index mapping
-        candidate_names = {}
-        for candidate in sorted(all_candidates):
-            idx = self._get_candidate_index(candidate)
-            candidate_names[idx] = candidate
-
-        # Create constituency index mapping
-        constituency_map = {}
-        for idx, data in enumerate(parsed_data_list):
-            if data:
-                constituency_map[data['constituency_id']] = idx
-
-        # Convert transfers to EventData format
-        for const_idx, data in enumerate(parsed_data_list):
-            if not data or not data['transfers']:
+            if not data:
                 continue
 
-            # Group transfers by source candidate
-            source_transfers = {}
+            # Extract party info from first preferences
+            for fp in data.get('first_prefs', []):
+                candidate = fp['candidate']
+                party = fp.get('party', 'Independent')
+                self._map_candidate_to_party(candidate, party)
+                all_parties.add(party)
+
+            # Also check transfers for any missing candidates
+            for transfer in data.get('transfers', []):
+                from_candidate = transfer['from_candidate']
+                to_candidate = transfer['to_candidate']
+
+                # Use existing mapping or default to Independent
+                if from_candidate not in self.candidate_to_party:
+                    self._map_candidate_to_party(from_candidate, 'Independent')
+                if to_candidate not in self.candidate_to_party:
+                    self._map_candidate_to_party(to_candidate, 'Independent')
+
+                all_parties.add(self._get_candidate_party(from_candidate))
+                all_parties.add(self._get_candidate_party(to_candidate))
+
+        # Ensure non-transferable is included
+        all_parties.add('non-transferable')
+
+        # Create party index mappings
+        source_parties = [party for party in all_parties if party != 'non-transferable']
+        party_to_model_idx = {party: i for i, party in enumerate(sorted(all_parties))}
+        source_party_to_model_idx = {party: i for i, party in enumerate(sorted(source_parties))}
+
+        # Create reverse mapping for ModelData party_names
+        model_party_names = {i: party for i, party in enumerate(sorted(all_parties))}
+
+        # Second pass: aggregate transfers by party
+        for const_idx, data in enumerate(parsed_data_list):
+            if not data or not data.get('transfers'):
+                continue
+
+            # Aggregate transfers by source party -> destination party
+            party_transfers = {}
             for transfer in data['transfers']:
-                from_name = transfer['from_candidate']
-                from_idx = self._get_candidate_index(from_name)
+                from_candidate = transfer['from_candidate']
+                to_candidate = transfer['to_candidate']
 
-                if from_idx not in source_transfers:
-                    source_transfers[from_idx] = []
-                source_transfers[from_idx].append(transfer)
+                from_party = self._get_candidate_party(from_candidate)
+                to_party = self._get_candidate_party(to_candidate)
 
-            # Create EventData for each source
-            for source_idx, transfers in source_transfers.items():
-                # Determine active destinations (those that received transfers)
-                destination_counts = {}
-                total_transfers = 0
+                # Skip if source party is non-transferable
+                if from_party == 'non-transferable':
+                    continue
 
-                for transfer in transfers:
-                    to_name = transfer['to_candidate']
-                    to_idx = self._get_candidate_index(to_name)
-                    count = transfer['transfer_count'] * transfer['transfer_value']
+                count = transfer['transfer_count'] * transfer.get('transfer_value', 1.0)
 
-                    if to_idx not in destination_counts:
-                        destination_counts[to_idx] = 0
-                    destination_counts[to_idx] += count
-                    total_transfers += count
+                if from_party not in party_transfers:
+                    party_transfers[from_party] = {}
+                if to_party not in party_transfers[from_party]:
+                    party_transfers[from_party][to_party] = 0
+
+                party_transfers[from_party][to_party] += count
+
+            # Create EventData for each source party
+            for source_party, destinations in party_transfers.items():
+                if source_party not in source_party_to_model_idx:
+                    continue
+
+                model_source_idx = source_party_to_model_idx[source_party]
+                total_transfers = sum(destinations.values())
 
                 if total_transfers > 0:
                     # Create arrays for EventData
-                    active_indices = sorted(destination_counts.keys())
-                    transfer_counts = [destination_counts[idx] for idx in active_indices]
+                    active_parties = sorted(destinations.keys())
+                    active_indices = [party_to_model_idx[party] for party in active_parties]
+                    transfer_counts = [destinations[party] for party in active_parties]
 
                     event = EventData(
                         constituency_idx=const_idx,
-                        source_indices=np.array([source_idx]),
+                        source_indices=np.array([model_source_idx]),
                         active_indices=np.array(active_indices),
                         transfer_counts=np.array(transfer_counts, dtype=np.float32),
                         total_transfers=float(total_transfers)
@@ -830,11 +882,11 @@ class ElectionScraper:
                     events.append(event)
 
         return ModelData(
-            n_sources=len([name for idx, name in candidate_names.items() if name != 'non-transferable']),
-            n_destinations=len(candidate_names),
+            n_source_parties=len(source_parties),
+            n_dest_parties=len(all_parties),
             n_constituencies=len([d for d in parsed_data_list if d]),
             events=events,
-            candidate_names=candidate_names
+            party_names=model_party_names
         )
 
     def scrape_election(self, election: str, constituency_ids: List[str]) -> ModelData:

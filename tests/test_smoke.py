@@ -68,7 +68,7 @@ def test_simulator_import():
     try:
         from stv_transfers import simulator
         assert hasattr(simulator, "STVSimulator")
-        assert hasattr(simulator, "Candidate")
+        assert hasattr(simulator, "Ballot")
         assert hasattr(simulator, "TransferEvent")
 
     except ImportError as e:
@@ -127,22 +127,22 @@ def test_election_data_creation():
 
 def test_simulator_basic_functionality():
     """Test basic simulator functionality without full simulation."""
-    from stv_transfers.simulator import STVSimulator, Candidate
+    from stv_transfers.simulator import STVSimulator, Ballot
+    import numpy as np
 
-    simulator = STVSimulator(num_seats=3, random_seed=42)
-    assert simulator.num_seats == 3
+    # Create a simple 2x2 transfer matrix for testing (diagonals=0, rows sum to 1)
+    transfer_matrix = np.array([[0.0, 1.0], [1.0, 0.0]])
+    simulator = STVSimulator(transfer_matrix=transfer_matrix, seed=42)
+    assert simulator.transfer_matrix.shape == (2, 2)
 
-    # Test candidate creation
-    candidate = Candidate(
-        id="sim_001",
-        name="Sim Candidate",
-        party="Sim Party",
-        first_preferences=500
+    # Test ballot creation
+    ballot = Ballot(
+        preferences=[1, 2, 3],
+        weight=1.0
     )
 
-    assert candidate.id == "sim_001"
-    assert candidate.first_preferences == 500
-    assert not candidate.is_elected
+    assert ballot.preferences == [1, 2, 3]
+    assert ballot.weight == 1.0
 
 
 @pytest.mark.parametrize("module_name", [

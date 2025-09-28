@@ -52,13 +52,18 @@ class STVSimulator:
         Parameters
         ----------
         transfer_matrix : np.ndarray
-            Square matrix where element [i,j] is probability of transferring
-            from candidate i to candidate j. Rows should sum to ≈1, diagonals = 0.
+            Matrix where element [i,j] is probability of transferring
+            from source candidate i to destination candidate j.
+            Can be rectangular (n_sources × n_destinations) or square.
+            Rows should sum to ≈1.
         seed : int, optional
             Random seed for reproducible simulations
         """
         self.transfer_matrix = np.array(transfer_matrix, dtype=np.float64)
-        self.n_candidates = self.transfer_matrix.shape[0]
+        self.n_sources = self.transfer_matrix.shape[0]
+        self.n_destinations = self.transfer_matrix.shape[1]
+        # For backward compatibility
+        self.n_candidates = max(self.n_sources, self.n_destinations)
 
         # Validate transfer matrix
         self.validate_transfer_matrix()
@@ -68,17 +73,15 @@ class STVSimulator:
 
     def validate_transfer_matrix(self) -> None:
         """Validate that transfer matrix is properly formed."""
-        if self.transfer_matrix.shape[0] != self.transfer_matrix.shape[1]:
-            raise ValueError("Transfer matrix must be square")
-
-        # Check that all probabilities are non-negative (first to give clear error)
+        # Check that all probabilities are non-negative
         if np.any(self.transfer_matrix < 0):
             raise ValueError("Transfer matrix cannot contain negative probabilities")
 
-        # Check that diagonals are zero (no self-transfers)
-        diagonals = np.diag(self.transfer_matrix)
-        if not np.allclose(diagonals, 0.0, atol=1e-10):
-            raise ValueError(f"Transfer matrix diagonals must be 0 (no self-transfers). Got: {diagonals}")
+        # Check that diagonals are zero (no self-transfers) if square matrix
+        if self.n_sources == self.n_destinations:
+            diagonals = np.diag(self.transfer_matrix)
+            if not np.allclose(diagonals, 0.0, atol=1e-10):
+                raise ValueError(f"Transfer matrix diagonals must be 0 (no self-transfers). Got: {diagonals}")
 
         # Check that rows sum to approximately 1
         row_sums = np.sum(self.transfer_matrix, axis=1)
@@ -110,17 +113,17 @@ class STVSimulator:
         Parameters
         ----------
         source_idx : int
-            Index of the candidate whose votes are being transferred
+            Index of the source candidate whose votes are being transferred
         n_transfers : int
             Number of transfers to simulate
 
         Returns
         -------
         np.ndarray
-            Array of length n_candidates with count of transfers to each candidate
+            Array of length n_destinations with count of transfers to each destination
         """
-        if source_idx >= self.n_candidates:
-            raise ValueError(f"source_idx {source_idx} >= n_candidates {self.n_candidates}")
+        if source_idx >= self.n_sources:
+            raise ValueError(f"source_idx {source_idx} >= n_sources {self.n_sources}")
 
         # Sample from multinomial distribution using transfer probabilities
         transfer_probs = self.transfer_matrix[source_idx]
